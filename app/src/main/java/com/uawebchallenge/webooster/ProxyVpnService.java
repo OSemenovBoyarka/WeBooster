@@ -1,5 +1,8 @@
 package com.uawebchallenge.webooster;
 
+import com.runjva.sourceforge.jsocks.protocol.ProxyServer;
+import com.runjva.sourceforge.jsocks.server.ServerAuthenticatorNone;
+
 import org.torproject.android.vpn.Tun2Socks;
 
 import android.content.BroadcastReceiver;
@@ -11,6 +14,7 @@ import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import java.io.IOException;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 
@@ -42,7 +46,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
 
     private static final int VPN_MTU = 1500;
 
-    private static final int PROXY_PORT = 8080;
+    private static final int PROXY_PORT = 7996;
 
     private ParcelFileDescriptor vpnInterface;
 
@@ -85,6 +89,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
             }
             Tun2Socks.Stop();
         }
+        stopSocksBypass();
 
 
     }
@@ -95,24 +100,26 @@ public class ProxyVpnService extends VpnService implements Runnable {
 
         //magic goes here :)
 //
-//        Thread forwarderThread = new Thread(new Runnable() {
-//            @Override
-//            public void run() {
-//                while (!Thread.currentThread().isInterrupted()) {
-//                    try {
-//                        Log.d(TAG, "run: listening for network requests...");
-//                        ServerSocket serverSocket = new ServerSocket(PROXY_PORT);
-//                        Socket socket = serverSocket.accept();
-//                        Log.d(TAG, "run: accepted socket: " + socket);
-//                    } catch (IOException e) {
-//                        e.printStackTrace();
-//                    }
-//                }
-//
-//            }
-//        });
-//        forwarderThread.start();
+        Thread forwarderThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        Log.d(TAG, "run: listening for network requests...");
+                        ServerSocket serverSocket = new ServerSocket(PROXY_PORT);
+                        Socket socket = serverSocket.accept();
+                        Log.d(TAG, "run: accepted socket: " + socket);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+
+            }
+        });
+        forwarderThread.start();
         try {
+//            startSocksBypass();
+
             final String virtualGateway = "10.10.10.1";
             final String virtualIP = "10.10.10.2";
             final String virtualNetMask = "255.255.255.0";
@@ -121,7 +128,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
             final String defaultRoute = "0.0.0.0";
 
             final String localSocks = "127.0.0.1" + ":" + PROXY_PORT;
-            final String localDns = "127.0.0.1" + ":" + PROXY_PORT;
+            final String localDns = "127.0.0.1"+":"+PROXY_PORT;
 
             Builder builder = new Builder();
             builder.setSession(getString(R.string.app_name));
@@ -138,12 +145,12 @@ public class ProxyVpnService extends VpnService implements Runnable {
             }
 
             Tun2Socks.Start(vpnInterface, VPN_MTU, virtualIP, virtualNetMask, localSocks, localDns,
-                    true);
+                    false);
 
         } catch (Exception e) {
             Log.d(TAG, "tun2Socks has stopped", e);
         }
-        if (vpnInterface != null){
+        if (vpnInterface != null) {
             try {
                 vpnInterface.close();
             } catch (IOException e) {
@@ -151,6 +158,63 @@ public class ProxyVpnService extends VpnService implements Runnable {
             }
             vpnInterface = null;
         }
+        stopSocksBypass();
+        forwarderThread.interrupt();
+    }
+
+    public static int sSocksProxyServerPort = PROXY_PORT;
+
+    public static String sSocksProxyLocalhost = null;
+
+    private ProxyServer mSocksProxyServer;
+
+    private void startSocksBypass() {
+
+        new Thread() {
+
+            public void run() {
+
+                //generate the proxy port that the
+                if (sSocksProxyServerPort == -1) {
+                    try {
+
+                        sSocksProxyLocalhost
+                                = "127.0.0.1";// InetAddress.getLocalHost().getHostAddress();
+                        sSocksProxyServerPort = (int) ((Math.random() * 1000) + 10000);
+
+                    } catch (Exception e) {
+                        Log.e(TAG, "Unable to access localhost", e);
+                        throw new RuntimeException("Unable to access localhost: " + e);
+
+                    }
+
+                }
+
+                if (mSocksProxyServer != null) {
+                    stopSocksBypass();
+                }
+
+                try {
+                    mSocksProxyServer = new ProxyServer(new ServerAuthenticatorNone(null, null));
+                    ProxyServer.setVpnService(ProxyVpnService.this);
+                    mSocksProxyServer.start(sSocksProxyServerPort);
+
+                } catch (Exception e) {
+                    Log.e(TAG, "error getting host", e);
+                }
+            }
+        }.start();
+
+    }
+
+    private synchronized void stopSocksBypass() {
+
+        if (mSocksProxyServer != null) {
+            mSocksProxyServer.stop();
+            mSocksProxyServer = null;
+        }
+
+
     }
 
 }
