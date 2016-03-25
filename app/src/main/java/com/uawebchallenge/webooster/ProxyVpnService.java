@@ -15,8 +15,6 @@ import android.util.Log;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
 
 /**
  * @author Alexander Semenov
@@ -41,12 +39,16 @@ public class ProxyVpnService extends VpnService implements Runnable {
     /// tun2socks
     private Process tun2SocksProcess = null;
 
-    //xSocks
-    private static final String VPN_ADDRESS = "26.26.26.1";
+    //Socks server
+    private ProxyServer mSocksProxyServer;
 
     private static final int VPN_MTU = 1500;
 
-    private static final int PROXY_PORT = 7996;
+    private static final int SOCKS_PROXY_PORT = 7996;
+
+    public static final int HTTP_PROXY_PORT = 7999;
+
+    private final int SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS = 50;
 
     private ParcelFileDescriptor vpnInterface;
 
@@ -97,44 +99,24 @@ public class ProxyVpnService extends VpnService implements Runnable {
 
     @Override
     public void run() {
-
-        //magic goes here :)
-//
-        Thread forwarderThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                while (!Thread.currentThread().isInterrupted()) {
-                    try {
-                        Log.d(TAG, "run: listening for network requests...");
-                        ServerSocket serverSocket = new ServerSocket(PROXY_PORT);
-                        Socket socket = serverSocket.accept();
-                        Log.d(TAG, "run: accepted socket: " + socket);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-
-            }
-        });
-        forwarderThread.start();
         try {
-//            startSocksBypass();
+            startSocksBypass();
 
             final String virtualGateway = "10.10.10.1";
             final String virtualIP = "10.10.10.2";
             final String virtualNetMask = "255.255.255.0";
-            final String dummyDNS
-                    = "8.8.8.8"; //this is intercepted by the tun2socks library, but we must put in a valid DNS to start
             final String defaultRoute = "0.0.0.0";
 
-            final String localSocks = "127.0.0.1" + ":" + PROXY_PORT;
-            final String localDns = "127.0.0.1"+":"+PROXY_PORT;
+            final String localSocks = "127.0.0.1" + ":" + SOCKS_PROXY_PORT;
+
+            //TODO replace this with actual DNS forwarder like badvpn-udpgw, see https://github.com/ambrop72/badvpn/blob/master/tun2socks/badvpn-tun2socks.8
+            //TODO alternatively - use system provided DNS
+            String udpgwDNSServerAddress = "8.8.8.8:53";
 
             Builder builder = new Builder();
             builder.setSession(getString(R.string.app_name));
             builder.setMtu(VPN_MTU);
             builder.addAddress(virtualGateway, 32);
-            builder.addDnsServer(dummyDNS);
 
             //we will route all traffic
             builder.addRoute(defaultRoute, 0);
@@ -142,9 +124,11 @@ public class ProxyVpnService extends VpnService implements Runnable {
             vpnInterface = builder.establish();
             if (vpnInterface == null) {
                 Log.e(TAG, "vpn interface is null");
+                return;
             }
 
-            Tun2Socks.Start(vpnInterface, VPN_MTU, virtualIP, virtualNetMask, localSocks, localDns,
+            Tun2Socks.Start(vpnInterface, VPN_MTU, virtualIP, virtualNetMask, localSocks,
+                    udpgwDNSServerAddress,
                     false);
 
         } catch (Exception e) {
@@ -159,46 +143,22 @@ public class ProxyVpnService extends VpnService implements Runnable {
             vpnInterface = null;
         }
         stopSocksBypass();
-        forwarderThread.interrupt();
     }
 
-    public static int sSocksProxyServerPort = PROXY_PORT;
-
-    public static String sSocksProxyLocalhost = null;
-
-    private ProxyServer mSocksProxyServer;
 
     private void startSocksBypass() {
-
+        //jSOCKS works in blocking mode, so using own thread for it
         new Thread() {
 
             public void run() {
-
-                //generate the proxy port that the
-                if (sSocksProxyServerPort == -1) {
-                    try {
-
-                        sSocksProxyLocalhost
-                                = "127.0.0.1";// InetAddress.getLocalHost().getHostAddress();
-                        sSocksProxyServerPort = (int) ((Math.random() * 1000) + 10000);
-
-                    } catch (Exception e) {
-                        Log.e(TAG, "Unable to access localhost", e);
-                        throw new RuntimeException("Unable to access localhost: " + e);
-
-                    }
-
-                }
-
                 if (mSocksProxyServer != null) {
                     stopSocksBypass();
                 }
-
                 try {
                     mSocksProxyServer = new ProxyServer(new ServerAuthenticatorNone(null, null));
                     ProxyServer.setVpnService(ProxyVpnService.this);
-                    mSocksProxyServer.start(sSocksProxyServerPort);
-
+                    mSocksProxyServer.start(SOCKS_PROXY_PORT, SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS,
+                            InetAddress.getLocalHost());
                 } catch (Exception e) {
                     Log.e(TAG, "error getting host", e);
                 }
