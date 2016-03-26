@@ -1,7 +1,9 @@
 package com.uawebchallenge.webooster;
 
+import com.runjva.sourceforge.jsocks.protocol.PortForwardRule;
 import com.runjva.sourceforge.jsocks.protocol.ProxyServer;
 import com.runjva.sourceforge.jsocks.server.ServerAuthenticatorNone;
+import com.uawebchallenge.webooster.http.HttpProxyServer;
 
 import org.torproject.android.vpn.Tun2Socks;
 
@@ -15,6 +17,7 @@ import android.util.Log;
 
 import java.io.IOException;
 import java.net.InetAddress;
+
 
 /**
  * @author Alexander Semenov
@@ -41,6 +44,8 @@ public class ProxyVpnService extends VpnService implements Runnable {
 
     //Socks server
     private ProxyServer mSocksProxyServer;
+
+    private HttpProxyServer mHttpProxyServer;
 
     private static final int VPN_MTU = 1500;
 
@@ -84,9 +89,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
                 vpnInterface.close();
                 vpnInterface = null;
 
-            } catch (Exception e) {
-                Log.d(TAG, "error stopping tun2socks", e);
-            } catch (Error e) {
+            } catch (Exception | Error e) {
                 Log.d(TAG, "error stopping tun2socks", e);
             }
             Tun2Socks.Stop();
@@ -100,8 +103,9 @@ public class ProxyVpnService extends VpnService implements Runnable {
     @Override
     public void run() {
         try {
-            startSocksBypass();
 
+            startSocksBypass();
+            startHttpProxy();
             final String virtualGateway = "10.10.10.1";
             final String virtualIP = "10.10.10.2";
             final String virtualNetMask = "255.255.255.0";
@@ -128,8 +132,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
             }
 
             Tun2Socks.Start(vpnInterface, VPN_MTU, virtualIP, virtualNetMask, localSocks,
-                    udpgwDNSServerAddress,
-                    false);
+                    udpgwDNSServerAddress, true);
 
         } catch (Exception e) {
             Log.d(TAG, "tun2Socks has stopped", e);
@@ -141,24 +144,29 @@ public class ProxyVpnService extends VpnService implements Runnable {
                 e.printStackTrace();
             }
             vpnInterface = null;
+
         }
         stopSocksBypass();
+        stopHttpServer();
     }
 
 
-    private void startSocksBypass() {
+    private synchronized void startSocksBypass() {
         //jSOCKS works in blocking mode, so using own thread for it
         new Thread() {
 
             public void run() {
-                if (mSocksProxyServer != null) {
-                    stopSocksBypass();
-                }
+                stopSocksBypass();
                 try {
                     mSocksProxyServer = new ProxyServer(new ServerAuthenticatorNone(null, null));
                     ProxyServer.setVpnService(ProxyVpnService.this);
+
+                    //this will redirect all http traffic to our local proxy, which will compress it
+                    InetAddress localHost = InetAddress.getLocalHost();
+                    ProxyServer.setPortForwardingRule(new PortForwardRule(80, HTTP_PROXY_PORT, localHost));
+
                     mSocksProxyServer.start(SOCKS_PROXY_PORT, SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS,
-                            InetAddress.getLocalHost());
+                            localHost);
                 } catch (Exception e) {
                     Log.e(TAG, "error getting host", e);
                 }
@@ -168,13 +176,35 @@ public class ProxyVpnService extends VpnService implements Runnable {
     }
 
     private synchronized void stopSocksBypass() {
-
         if (mSocksProxyServer != null) {
             mSocksProxyServer.stop();
             mSocksProxyServer = null;
         }
+    }
 
+    private void startHttpProxy() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                stopHttpServer();
+                mHttpProxyServer = new HttpProxyServer();
+                mHttpProxyServer.setVpnService(ProxyVpnService.this);
+                try {
+                    mHttpProxyServer.start(HTTP_PROXY_PORT);
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to start local http proxy", e);
+                    e.printStackTrace();
+                }
+            }
+        }).start();
 
+    }
+
+    private synchronized void stopHttpServer() {
+        if (mHttpProxyServer != null) {
+            mHttpProxyServer.stop();
+            mHttpProxyServer = null;
+        }
     }
 
 }
