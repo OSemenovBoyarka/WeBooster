@@ -95,6 +95,11 @@ public class ProxyServer implements Runnable {
 	// ///////////////
 
 
+	/**
+	 * Adds rule to forward traffic on some port directly to another proxy, regardless of type.
+	 *
+	 * @param rule passing rule with negative port will forward all traffic
+     	 */
 	public static void setPortForwardingRule(PortForwardRule rule){
 		if (portForwardingRules.contains(rule)){
 			portForwardingRules.remove(rule);
@@ -368,25 +373,22 @@ public class ProxyServer implements Runnable {
 
 	@SuppressLint("NewApi")
 	private void onConnect(final ProxyMessage msg) throws IOException {
+		debug("On connect to " + msg.ip + ":" + msg.port);
 		Socket s;
-
-		if (proxy == null) {
-			
+		boolean shouldDirect = false;
+		for (PortForwardRule rule : portForwardingRules){
+			if (rule.srcPort < 0 || msg.port == rule.srcPort){
+				msg.ip = rule.destIP;
+				msg.port = rule.destPort;
+				shouldDirect = true;
+			}
+		}
+		if (shouldDirect || proxy == null) {
 			s = SocketChannel.open().socket();
 			if ((null != s) && (null != vpnService)) {
 			    vpnService.protect(s);
 			}
-
-			InetAddress ip = msg.ip;
-			int port = msg.port;
-			for (PortForwardRule rule : portForwardingRules){
-				if (msg.port == rule.srcPort){
-					ip = rule.destIP;
-					port = rule.destPort;
-					break;
-				}
-			}
-			s.connect(new InetSocketAddress(ip, port));
+			s.connect(new InetSocketAddress(msg.ip, msg.port));
 
 
 		} else {
