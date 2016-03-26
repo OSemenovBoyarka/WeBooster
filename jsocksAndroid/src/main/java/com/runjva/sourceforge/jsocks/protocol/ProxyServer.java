@@ -13,6 +13,8 @@ import java.net.NoRouteToHostException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.channels.SocketChannel;
+import java.util.HashSet;
+import java.util.Set;
 
 import android.annotation.SuppressLint;
 import android.net.VpnService;
@@ -63,7 +65,10 @@ public class ProxyServer implements Runnable {
 	static VpnService vpnService;
 
 	static boolean DEBUG = true;
-	
+
+	//Adds possibility to forward connections from specific ports transparently
+	private static Set<PortForwardRule> portForwardingRules = new HashSet<PortForwardRule>();
+
 	// Public Constructors
 	// ///////////////////
 
@@ -88,6 +93,18 @@ public class ProxyServer implements Runnable {
 
 	// Public methods
 	// ///////////////
+
+
+	public static void setPortForwardingRule(PortForwardRule rule){
+		if (portForwardingRules.contains(rule)){
+			portForwardingRules.remove(rule);
+		}
+		portForwardingRules.add(rule);
+	}
+
+	public static Set<PortForwardRule> getPortForwardingRules(){
+		return new HashSet<PortForwardRule>(portForwardingRules);
+	}
 
 	/**
 	 * Set proxy.
@@ -359,9 +376,19 @@ public class ProxyServer implements Runnable {
 			if ((null != s) && (null != vpnService)) {
 			    vpnService.protect(s);
 			}
-			
-			s.connect(new InetSocketAddress(msg.ip,msg.port));
-			
+
+			InetAddress ip = msg.ip;
+			int port = msg.port;
+			for (PortForwardRule rule : portForwardingRules){
+				if (msg.port == rule.srcPort){
+					ip = rule.destIP;
+					port = rule.destPort;
+					break;
+				}
+			}
+			s.connect(new InetSocketAddress(ip, port));
+
+
 		} else {
 			s = new SocksSocket(proxy, msg.ip, msg.port);
 
