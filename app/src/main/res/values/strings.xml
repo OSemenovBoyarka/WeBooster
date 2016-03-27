@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">WeBooster</string>
+    <string name="use_google_data_compression_proxy">Use Google Data Compression Proxy</string>
+    <string name="enable_proxy">Start WeBooster </string>
+    <string name="greeting">Welcome to WeBoster, this app will make your web browsing much faster.
+        It\'s very simple - just tap switch below.
+    </string>
 </resources>

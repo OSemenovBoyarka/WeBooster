@@ -19,9 +19,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
-import java.net.Socket;
 import java.net.SocketAddress;
-import java.net.UnknownHostException;
 
 
 /**
@@ -31,8 +29,13 @@ public class ProxyVpnService extends VpnService implements Runnable {
 
     private static final String TAG = ProxyVpnService.class.getSimpleName();
 
+    public static final String PREFS_ENABLE_GOOGLE_COMPRESSION = "ENABLE_GOOGLE_DATA_COMPRESSION";
+    public static final String PREFS_NAME = "VPN_PROXY_PREFS";
+
     public static final String DISCONNECT_ACTION = ProxyVpnService.class.getName()
             + ".DISCONNECT_VPN";
+    public static final String PREFS_UPDATE_ACTION = ProxyVpnService.class.getName()
+            + ".PREFS_UPDATE";
 
     final private BroadcastReceiver stopServiceReceiver = new BroadcastReceiver() {
         @Override
@@ -41,6 +44,22 @@ public class ProxyVpnService extends VpnService implements Runnable {
             stopSelf();
         }
     };
+
+    final private BroadcastReceiver prefsUpdateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            boolean useGoogleProxy= ConfigHelper.getUseGoogleProxy(ProxyVpnService.this);
+            if (httpProxyServer != null){
+                httpProxyServer.setUseGoogleDataCompression(useGoogleProxy);
+            }
+        }
+    };
+
+    private static volatile boolean isProxyRunning;
+
+    public static boolean isProxyRunning() {
+        return isProxyRunning;
+    }
 
     private Thread vpnThread;
 
@@ -80,12 +99,14 @@ public class ProxyVpnService extends VpnService implements Runnable {
     public void onCreate() {
         super.onCreate();
         registerReceiver(stopServiceReceiver, new IntentFilter(DISCONNECT_ACTION));
+        registerReceiver(prefsUpdateReceiver, new IntentFilter(PREFS_UPDATE_ACTION));
     }
 
     @Override
     public void onDestroy() {
         stopLocalVpnProxy();
         unregisterReceiver(stopServiceReceiver);
+        unregisterReceiver(prefsUpdateReceiver);
     }
 
     public void stopLocalVpnProxy() {
@@ -112,6 +133,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
     @Override
     public void run() {
         try {
+            isProxyRunning = true;
             InetAddress localHost = InetAddress.getLocalHost();
             startSocksBypass(localHost);
             startHttpProxy(localHost);
@@ -158,6 +180,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
         }
         stopSocksBypass();
         stopHttpServer();
+        isProxyRunning = false;
     }
 
 
@@ -222,7 +245,10 @@ public class ProxyVpnService extends VpnService implements Runnable {
             @Override
             public void run() {
                 stopHttpServer();
+                boolean useGoogleProxy= ConfigHelper.getUseGoogleProxy(ProxyVpnService.this);
+
                 httpProxyServer = new HttpCompressingProxyServer();
+                httpProxyServer.setUseGoogleDataCompression(useGoogleProxy);
 
                 //let out conections pass
                 SocketAddress outProxyAddr = new InetSocketAddress(outProxyAddress, SOCKS_SOCKS_OUT_PROXY_PORT);

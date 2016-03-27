@@ -1,7 +1,11 @@
 package com.uawebchallenge.webooster;
 
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.VpnService;
+import android.preference.Preference;
+import android.preference.PreferenceManager;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import android.support.v7.widget.SwitchCompat;
@@ -10,8 +14,6 @@ import android.widget.CompoundButton;
 
 public class MainActivity extends AppCompatActivity {
 
-    private SwitchCompat vpnSwitch;
-
     private static final int REQUEST_CODE_VPN = 0;
 
     @Override
@@ -19,18 +21,39 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         //TODO move UI to fragment
-        vpnSwitch = (SwitchCompat) findViewById(R.id.sw_activate_vpn);
+        initViews();
+    }
+
+    private void initViews() {
+        SwitchCompat vpnSwitch = (SwitchCompat) findViewById(R.id.sw_activate_vpn);
+        vpnSwitch.setChecked(ProxyVpnService.isProxyRunning());
         vpnSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
             public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                if (isChecked){
+                if (isChecked) {
                     enableProxy();
                 } else {
                     stopProxy();
                 }
             }
         });
+
+        boolean enableCompression = ConfigHelper.getUseGoogleProxy(this);
+        SwitchCompat googleCompressionSwitch = (SwitchCompat) findViewById(
+                R.id.sw_use_google_compression);
+        googleCompressionSwitch.setChecked(enableCompression);
+        googleCompressionSwitch.setOnCheckedChangeListener(
+                new CompoundButton.OnCheckedChangeListener() {
+                    @Override
+                    public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                        ConfigHelper.setUseGoogleProxy(MainActivity.this, isChecked);
+                        Intent intent = new Intent(ProxyVpnService.PREFS_UPDATE_ACTION);
+                        sendBroadcast(intent);
+                    }
+                });
+
     }
+
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -41,13 +64,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
 
-
-
-
     //region proxy control
     private void enableProxy() {
         Intent intent = VpnService.prepare(this);
-        if (intent != null){
+        if (intent != null) {
             startActivityForResult(intent, REQUEST_CODE_VPN);
         } else {
             startProxyVpnService();

@@ -48,6 +48,8 @@ public class HttpCompressingProxyServer {
 
     private VpnService vpnService;
 
+    private boolean useGoogleDataCompression;
+
     public HttpCompressingProxyServer setVpnService(VpnService vpnService) {
         this.vpnService = vpnService;
         return this;
@@ -55,6 +57,12 @@ public class HttpCompressingProxyServer {
 
     public HttpCompressingProxyServer setChainingProxy(Proxy chainingProxy) {
         this.chainingProxy = chainingProxy;
+        return this;
+    }
+
+    public HttpCompressingProxyServer setUseGoogleDataCompression(
+            boolean useGoogleDataCompression) {
+        this.useGoogleDataCompression = useGoogleDataCompression;
         return this;
     }
 
@@ -130,14 +138,14 @@ public class HttpCompressingProxyServer {
             boolean protectSocket = vpnService.protect(outSocket);
             Log.i(TAG, "Did protect socket: "+protectSocket);
         }
-        DataCompressionProxyHelper.modifyRequest(requestModel);
-        DataCompressionProxyHelper.connectSocketToProxy(outSocket);
-
-//        SocketAddress socketAddress = new InetSocketAddress(requestModel.getHost(), 80);
-//        outSocket.connect(socketAddress);
-
-
-
+        if (useGoogleDataCompression) {
+            DataCompressionProxyHelper.modifyRequest(requestModel);
+            DataCompressionProxyHelper.connectSocketToProxy(outSocket);
+        } else {
+            //direct connection
+            SocketAddress socketAddress = new InetSocketAddress(requestModel.getHost(), 80);
+            outSocket.connect(socketAddress);
+        }
         forwardRequest(requestModel, fromClientIn, toClientOut, outSocket);
     }
 
