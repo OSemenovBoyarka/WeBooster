@@ -3,7 +3,7 @@ package com.uawebchallenge.webooster;
 import com.runjva.sourceforge.jsocks.protocol.PortForwardRule;
 import com.runjva.sourceforge.jsocks.protocol.ProxyServer;
 import com.runjva.sourceforge.jsocks.server.ServerAuthenticatorNone;
-import com.uawebchallenge.webooster.http.HttpProxyServer;
+import com.uawebchallenge.webooster.http.HttpCompressingProxyServer;
 
 import org.torproject.android.vpn.Tun2Socks;
 
@@ -17,6 +17,10 @@ import android.util.Log;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.SocketAddress;
+import java.net.UnknownHostException;
 
 
 /**
@@ -32,35 +36,40 @@ public class ProxyVpnService extends VpnService implements Runnable {
     final private BroadcastReceiver stopServiceReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            stopProxy();
+            stopLocalVpnProxy();
             stopSelf();
         }
     };
 
     private Thread vpnThread;
 
-    /// tun2socks
-    private Process tun2SocksProcess = null;
+    //Socks server, used to forward all traffic from tun2socks further to network
+    // connections on port 80 are captured and forwarded to HttpCompressingProxyServer, all other connection are forwarded directly
+    private ProxyServer vpnForwardProxyServer;
 
-    //Socks server
-    private ProxyServer mSocksProxyServer;
+    //this is probably not the best solution, by I didn't had time to make something better
+    //this another socks proxy is needed to let http connections get to web from HttpCompressingProxyServer, bypassing VPN,
+    //it seems to be not possible to protect individual sockets, created from HttpUrlConnection or OkHttp framework
+    //TODO use simple HTTP only proxy instead of this
+    private ProxyServer outgoingProxyServer;
 
-    private HttpProxyServer mHttpProxyServer;
+    private HttpCompressingProxyServer httpProxyServer;
 
     private static final int VPN_MTU = 1500;
 
     private static final int SOCKS_PROXY_PORT = 7996;
+    private static final int SOCKS_SOCKS_OUT_PROXY_PORT = 7998;
 
-    public static final int HTTP_PROXY_PORT = 7999;
+    public static final int HTTP_PROXY_PORT = 8080;
 
-    private final int SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS = 50;
+    private final int SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS = 15;
 
     private ParcelFileDescriptor vpnInterface;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // Stop the previous session by interrupting the thread.
-        stopProxy();
+        stopLocalVpnProxy();
         vpnThread = new Thread(this, "ProxyVpnThread");
         vpnThread.start();
         return START_STICKY;
@@ -74,11 +83,11 @@ public class ProxyVpnService extends VpnService implements Runnable {
 
     @Override
     public void onDestroy() {
-        stopProxy();
+        stopLocalVpnProxy();
         unregisterReceiver(stopServiceReceiver);
     }
 
-    public void stopProxy() {
+    public void stopLocalVpnProxy() {
         if (vpnThread != null) {
             vpnThread.interrupt();
         }
@@ -95,17 +104,17 @@ public class ProxyVpnService extends VpnService implements Runnable {
             Tun2Socks.Stop();
         }
         stopSocksBypass();
-
-
+        stopHttpServer();
     }
 
 
     @Override
     public void run() {
         try {
+            InetAddress localHost = InetAddress.getLocalHost();
+            startSocksBypass(localHost);
+            startHttpProxy(localHost);
 
-            startSocksBypass();
-            startHttpProxy();
             final String virtualGateway = "10.10.10.1";
             final String virtualIP = "10.10.10.2";
             final String virtualNetMask = "255.255.255.0";
@@ -135,7 +144,7 @@ public class ProxyVpnService extends VpnService implements Runnable {
                     udpgwDNSServerAddress, true);
 
         } catch (Exception e) {
-            Log.d(TAG, "tun2Socks has stopped", e);
+            Log.i(TAG, "tun2Socks has stopped: " + e);
         }
         if (vpnInterface != null) {
             try {
@@ -151,24 +160,44 @@ public class ProxyVpnService extends VpnService implements Runnable {
     }
 
 
-    private synchronized void startSocksBypass() {
+    private synchronized void startSocksBypass(final InetAddress localHost) {
         //jSOCKS works in blocking mode, so using own thread for it
+                   final ServerAuthenticatorNone auth = new ServerAuthenticatorNone(null, null);
+                    ProxyServer.setVpnService(ProxyVpnService.this);
+        stopSocksBypass();
+        //this server will handle http requests from our local proxy and forward them to interned with protected sockets
         new Thread() {
 
             public void run() {
-                stopSocksBypass();
                 try {
-                    mSocksProxyServer = new ProxyServer(new ServerAuthenticatorNone(null, null));
-                    ProxyServer.setVpnService(ProxyVpnService.this);
-
-                    //this will redirect all http traffic to our local proxy, which will compress it
-                    InetAddress localHost = InetAddress.getLocalHost();
-                    ProxyServer.setPortForwardingRule(new PortForwardRule(80, HTTP_PROXY_PORT, localHost));
-
-                    mSocksProxyServer.start(SOCKS_PROXY_PORT, SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS,
-                            localHost);
+                    outgoingProxyServer = new ProxyServer(auth);
+                    outgoingProxyServer
+                            .start(SOCKS_SOCKS_OUT_PROXY_PORT, SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS,
+                                    localHost);
                 } catch (Exception e) {
-                    Log.e(TAG, "error getting host", e);
+                    Log.i(TAG, "Local outgoing proxy stopped: " + e.getMessage());
+                    //correctly handle errors
+                    stopLocalVpnProxy();
+                }
+            }
+        }.start();
+
+        new Thread() {
+
+            public void run() {
+                try {
+                    vpnForwardProxyServer = new ProxyServer(auth);
+                    //this will redirect all http traffic to our local proxy, which will compress it
+                    vpnForwardProxyServer
+                            .setPortForwardingRule(
+                                    new PortForwardRule(80, HTTP_PROXY_PORT, localHost));
+                    vpnForwardProxyServer
+                            .start(SOCKS_PROXY_PORT, SOCKS_PROXY_MAX_PARALLEL_CONNECTIONS,
+                                    localHost);
+                } catch (Exception e) {
+                    Log.i(TAG, "Local vpn bypass proxy stopped: " + e.getMessage());
+                    //correctly handle errors
+                    stopLocalVpnProxy();
                 }
             }
         }.start();
@@ -176,34 +205,44 @@ public class ProxyVpnService extends VpnService implements Runnable {
     }
 
     private synchronized void stopSocksBypass() {
-        if (mSocksProxyServer != null) {
-            mSocksProxyServer.stop();
-            mSocksProxyServer = null;
+        if (vpnForwardProxyServer != null) {
+            vpnForwardProxyServer.stop();
+            vpnForwardProxyServer = null;
+        }
+
+        if (outgoingProxyServer != null) {
+            outgoingProxyServer.stop();
+            outgoingProxyServer = null;
         }
     }
 
-    private void startHttpProxy() {
+    private void startHttpProxy(final InetAddress outProxyAddress) {
         new Thread(new Runnable() {
             @Override
             public void run() {
                 stopHttpServer();
-                mHttpProxyServer = new HttpProxyServer();
-                mHttpProxyServer.setVpnService(ProxyVpnService.this);
+                httpProxyServer = new HttpCompressingProxyServer();
+
+                //let out conections pass
+                SocketAddress outProxyAddr = new InetSocketAddress(outProxyAddress, SOCKS_SOCKS_OUT_PROXY_PORT);
+                Proxy outProxy = new Proxy(Proxy.Type.SOCKS, outProxyAddr);
+
+                httpProxyServer.setChainingProxy(outProxy);
                 try {
-                    mHttpProxyServer.start(HTTP_PROXY_PORT);
+                    httpProxyServer.start(HTTP_PROXY_PORT);
                 } catch (IOException e) {
-                    Log.e(TAG, "Failed to start local http proxy", e);
-                    e.printStackTrace();
+                    Log.i(TAG, "Local http proxy stopped: "+e.getMessage());
+                    stopLocalVpnProxy();
                 }
             }
         }).start();
 
     }
 
-    private synchronized void stopHttpServer() {
-        if (mHttpProxyServer != null) {
-            mHttpProxyServer.stop();
-            mHttpProxyServer = null;
+    private void stopHttpServer() {
+        if (httpProxyServer != null) {
+            httpProxyServer.stop();
+            httpProxyServer = null;
         }
     }
 

@@ -1,40 +1,25 @@
-/*
- * Data Compression Proxy bridge for Overchan
- * Copyright (C) 2014-2015  miku-nyan <https://github.com/miku-nyan>
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
- */
-
 package com.uawebchallenge.webooster.http;
 
+import android.support.annotation.NonNull;
 import android.text.TextUtils;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Based on https://github.com/miku-nyan/DCP-bridge/blob/master/src/nya/miku/dcpbridge/Request.java
- */
+import static com.uawebchallenge.webooster.http.HttpConstants.CR;
+import static com.uawebchallenge.webooster.http.HttpConstants.EOF;
+import static com.uawebchallenge.webooster.http.HttpConstants.HEADER_CONTENT_LENGTH;
+import static com.uawebchallenge.webooster.http.HttpConstants.HEADER_HOST;
+import static com.uawebchallenge.webooster.http.HttpConstants.LF;
+
 public class Request {
-    private static final byte[] CRLF = new byte[] { '\r', '\n' };
+
+
 
     private Request() {}
 
@@ -43,11 +28,17 @@ public class Request {
     private String host;
     private String method;
     private String uri;
+    private int contentLength = -1;
 
+    /**
+     * @return raw request header part
+     */
+    @NonNull
     public List<String> getLines() {
         return lines;
     }
 
+    @NonNull
     public Map<String, String> getHeaders() {
         return Collections.unmodifiableMap(headers);
     }
@@ -64,26 +55,29 @@ public class Request {
         return method;
     }
 
+    public boolean hasBody() {
+        return contentLength >= 0;
+    }
+
     boolean isValid(){
         return !(TextUtils.isEmpty(uri) && TextUtils.isEmpty(method) && TextUtils.isEmpty(host));
     }
 
-    public void writeTo(OutputStream out) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        for (String line : lines) {
-            baos.write(line.getBytes("UTF-8"));
-            baos.write(CRLF);
-        }
-        baos.write(CRLF);
-        baos.writeTo(out);
-    }
-
+    /**
+     * Parses HTTP/1.1 request from given input stream.
+     *
+     * This parses only headers, if request has content, it shuold be read separately from the same input stream
+     *
+     */
     public static Request read(InputStream is) throws IOException {
         Request request = new Request();
         String s = readLine(is);
         //obtain method and uri
         if (s != null && s.contains("HTTP/")){
             String[] split = s.split(" ");
+            if (split.length < 2){
+                throw new BadRequestException("Malformed first line of request: "+s);
+            }
             request.method = split[0];
             request.uri = split[1];
         }
@@ -97,7 +91,7 @@ public class Request {
         return request;
     }
 
-    private void extractHeaders() {
+    private void extractHeaders() throws IOException {
         for (String header : lines){
             String[] split = header.split(":");
             if (split.length != 2){
@@ -107,15 +101,23 @@ public class Request {
             String headerName = split[0].trim();
             String headerValue = split[1].trim();
             headers.put(headerName, headerValue);
-            if (headerName.equalsIgnoreCase("Host")){
+            if (host == null && headerName.equalsIgnoreCase(HEADER_HOST)){
                 host = headerValue;
+            } else if (contentLength < 0 && headerName.equalsIgnoreCase(HEADER_CONTENT_LENGTH)){
+                try {
+                    contentLength = Integer.parseInt(headerValue);
+                } catch (NumberFormatException e){
+                    throw new BadRequestException("Malformed Content-Length header value: "+headerValue);
+                }
             }
         }
     }
 
-    private static final char CR  = 13, LF  = 10;
-    private static final int EOF  = -1;
-
+    /**
+     * Reads single line from input stream, handling CRLF symbols
+     *
+     * Based on https://github.com/miku-nyan/DCP-bridge/blob/master/src/nya/miku/dcpbridge/Request.java
+     */
     private static String readLine(InputStream is) throws IOException {
         StringBuilder line = new StringBuilder();
         int i;

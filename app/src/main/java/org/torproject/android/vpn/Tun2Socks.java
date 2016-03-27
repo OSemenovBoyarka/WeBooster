@@ -17,6 +17,8 @@ package org.torproject.android.vpn;/*
  *
  */
 
+import com.uawebchallenge.webooster.BuildConfig;
+
 import java.net.DatagramSocket;
 import java.net.Socket;
 
@@ -35,7 +37,7 @@ public class Tun2Socks
     };
 
     private static final String TAG = Tun2Socks.class.getSimpleName();
-    private static final boolean LOGD = true;
+    private static final boolean LOGD = false;
 
     private static Thread mThread;
     private static ParcelFileDescriptor mVpnInterfaceFileDescriptor;

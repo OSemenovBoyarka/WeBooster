@@ -1,5 +1,7 @@
 package com.uawebchallenge.webooster.http;
 
+import android.util.Log;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -7,12 +9,14 @@ import java.io.OutputStream;
 /**
  * Passes traffic from input to output stream
  */
-class PipeRunnable implements Runnable {
+class PipeThread extends Thread {
+
+    private static final String TAG = "PipeThread";
+
     private InputStream from;
     private OutputStream to;
-    private Runnable onFinish;
 
-    public PipeRunnable(InputStream from, OutputStream to) {
+    public PipeThread(InputStream from, OutputStream to) {
         this.from = from;
         this.to = to;
     }
@@ -26,11 +30,8 @@ class PipeRunnable implements Runnable {
                 to.flush();
             }
             from.close();
-        } catch (IOException e) {}
-        if (onFinish != null) onFinish.run();
-    }
-    public PipeRunnable setFinishAction(Runnable onClosed) {
-        this.onFinish = onClosed;
-        return this;
+        } catch (IOException e) {
+            Log.w(TAG, "Failed to transfer data between streams: "+e.getMessage());
+        }
     }
 }

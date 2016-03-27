@@ -13,6 +13,7 @@ import java.net.NoRouteToHostException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.channels.SocketChannel;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -67,7 +68,7 @@ public class ProxyServer implements Runnable {
 	static boolean DEBUG = true;
 
 	//Adds possibility to forward connections from specific ports transparently
-	private static Set<PortForwardRule> portForwardingRules = new HashSet<PortForwardRule>();
+	private Set<PortForwardRule> portForwardingRules = Collections.synchronizedSet(new HashSet<PortForwardRule>());
 
 	// Public Constructors
 	// ///////////////////
@@ -100,14 +101,14 @@ public class ProxyServer implements Runnable {
 	 *
 	 * @param rule passing rule with negative port will forward all traffic
      	 */
-	public static void setPortForwardingRule(PortForwardRule rule){
+	public void setPortForwardingRule(PortForwardRule rule){
 		if (portForwardingRules.contains(rule)){
 			portForwardingRules.remove(rule);
 		}
 		portForwardingRules.add(rule);
 	}
 
-	public static Set<PortForwardRule> getPortForwardingRules(){
+	public Set<PortForwardRule> getPortForwardingRules(){
 		return new HashSet<PortForwardRule>(portForwardingRules);
 	}
 
@@ -211,6 +212,7 @@ public class ProxyServer implements Runnable {
 				debug("Accepted from: ", hostName, port2);
 
 				final ProxyServer ps = new ProxyServer(auth, s);
+				ps.portForwardingRules = portForwardingRules;
 				(new Thread(ps)).start();
 			}
 		} catch (final Exception ioe) {
