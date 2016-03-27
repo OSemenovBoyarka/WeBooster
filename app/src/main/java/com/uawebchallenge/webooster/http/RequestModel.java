@@ -2,9 +2,12 @@ package com.uawebchallenge.webooster.http;
 
 import android.support.annotation.NonNull;
 import android.text.TextUtils;
+import android.util.Log;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -12,35 +15,35 @@ import java.util.List;
 import java.util.Map;
 
 import static com.uawebchallenge.webooster.http.HttpConstants.CR;
+import static com.uawebchallenge.webooster.http.HttpConstants.CRLF;
+import static com.uawebchallenge.webooster.http.HttpConstants.CRLF_STR;
 import static com.uawebchallenge.webooster.http.HttpConstants.EOF;
 import static com.uawebchallenge.webooster.http.HttpConstants.HEADER_CONTENT_LENGTH;
 import static com.uawebchallenge.webooster.http.HttpConstants.HEADER_HOST;
+import static com.uawebchallenge.webooster.http.HttpConstants.HTTP_CHARSET;
+import static com.uawebchallenge.webooster.http.HttpConstants.HTTP_VERSION_1_1;
 import static com.uawebchallenge.webooster.http.HttpConstants.LF;
 
-public class Request {
+public class RequestModel {
 
 
 
-    private Request() {}
+    private RequestModel() {}
 
-    private List<String> lines = new ArrayList<>();
     private Map<String, String> headers = new HashMap<>();
     private String host;
     private String method;
     private String uri;
+    private String requestLine;
     private int contentLength = -1;
-
-    /**
-     * @return raw request header part
-     */
-    @NonNull
-    public List<String> getLines() {
-        return lines;
-    }
 
     @NonNull
     public Map<String, String> getHeaders() {
         return Collections.unmodifiableMap(headers);
+    }
+
+    public void setHeader(String name, String value){
+        headers.put(name, value);
     }
 
     public String getHost() {
@@ -59,8 +62,12 @@ public class Request {
         return contentLength >= 0;
     }
 
+    public String getRequestLine() {
+        return requestLine;
+    }
+
     boolean isValid(){
-        return !(TextUtils.isEmpty(uri) && TextUtils.isEmpty(method) && TextUtils.isEmpty(host));
+        return !(TextUtils.isEmpty(uri) && !TextUtils.isEmpty(method) && !TextUtils.isEmpty(host));
     }
 
     /**
@@ -69,9 +76,11 @@ public class Request {
      * This parses only headers, if request has content, it shuold be read separately from the same input stream
      *
      */
-    public static Request read(InputStream is) throws IOException {
-        Request request = new Request();
+    public static RequestModel read(InputStream is) throws IOException {
+        RequestModel request = new RequestModel();
+        List<String> lines = new ArrayList<>();
         String s = readLine(is);
+        request.requestLine = s;
         //obtain method and uri
         if (s != null && s.contains("HTTP/")){
             String[] split = s.split(" ");
@@ -82,16 +91,16 @@ public class Request {
             request.uri = split[1];
         }
         while (s != null && s.length() > 0) {
-            request.lines.add(s);
+            lines.add(s);
             s = readLine(is);
         }
 
-        request.extractHeaders();
+        request.extractHeaders(lines);
 
         return request;
     }
 
-    private void extractHeaders() throws IOException {
+    private void extractHeaders(List<String> lines) throws IOException {
         for (String header : lines){
             String[] split = header.split(":");
             if (split.length != 2){
@@ -111,6 +120,28 @@ public class Request {
                 }
             }
         }
+    }
+
+    public void writeTo(OutputStream out) throws IOException{
+        String requestLine;
+        if (TextUtils.isEmpty(this.requestLine)){
+            requestLine = method+" "+uri+" "+HTTP_VERSION_1_1+CRLF_STR;
+        } else {
+            requestLine = this.requestLine;
+        }
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(requestLine.getBytes(HTTP_CHARSET));
+        baos.write(CRLF);
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            String line = header.getKey()+": "+header.getValue();
+            baos.write(line.getBytes(HTTP_CHARSET));
+            //CRLF on end of each header
+            baos.write(CRLF);
+        }
+        //CRLF, indicating header section is ended
+        baos.write(CRLF);
+        baos.writeTo(out);
     }
 
     /**
@@ -135,6 +166,18 @@ public class Request {
             is.read();
         }
         return line.toString();
+    }
+
+    @Override
+    public String toString() {
+        return "RequestModel{" +
+                "headers=" + headers +
+                ", host='" + host + '\'' +
+                ", method='" + method + '\'' +
+                ", uri='" + uri + '\'' +
+                ", requestLine='" + requestLine + '\'' +
+                ", contentLength=" + contentLength +
+                '}';
     }
 }
 

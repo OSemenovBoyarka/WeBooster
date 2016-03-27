@@ -1,24 +1,22 @@
 package com.uawebchallenge.webooster.http;
 
-import com.uawebchallenge.webooster.util.StringUtils;
-
+import android.net.VpnService;
 import android.util.Log;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.URL;
+import java.net.SocketAddress;
+import java.nio.channels.SocketChannel;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
 import java.util.Set;
+
 
 import static com.uawebchallenge.webooster.http.HttpConstants.CRLF_STR;
 import static com.uawebchallenge.webooster.http.HttpConstants.HTTP_VERSION_1_1;
@@ -47,6 +45,18 @@ public class HttpCompressingProxyServer {
     private ServerSocket listenSocket;
 
     private Proxy chainingProxy;
+
+    private VpnService vpnService;
+
+    public HttpCompressingProxyServer setVpnService(VpnService vpnService) {
+        this.vpnService = vpnService;
+        return this;
+    }
+
+    public HttpCompressingProxyServer setChainingProxy(Proxy chainingProxy) {
+        this.chainingProxy = chainingProxy;
+        return this;
+    }
 
     /**
      * Starts server on localhost.
@@ -104,67 +114,120 @@ public class HttpCompressingProxyServer {
     /**
      * Main routing method
      */
-    protected void handleRequest(Request request, InputStream fromClientIn, OutputStream toClientOut)
+    protected void handleRequest(RequestModel requestModel, InputStream fromClientIn, OutputStream toClientOut)
             throws IOException {
-        Log.i(TAG, "Received " + request.getMethod() + " request to " + request.getHost());
-
-        URL url = new URL("http", request.getHost(), request.getUri());
-        HttpURLConnection connection;
-        if (chainingProxy != null) {
-            connection = (HttpURLConnection) url.openConnection(chainingProxy);
-        } else {
-            connection = (HttpURLConnection) url.openConnection();
+        Log.i(TAG, "Received " + requestModel.getMethod() + " request to " + requestModel.getHost());
+        Log.d(TAG, "Received request: " + requestModel);
+        //malformed request
+        if (!requestModel.isValid()) {
+            toClientOut.write(BAD_REQUEST_RESPONSE.getBytes());
+            toClientOut.flush();
+            Log.w(TAG, "Got invalid request: "+requestModel);
+            return;
         }
-
-        connection.setRequestMethod(request.getMethod());
-        for (Map.Entry<String, String> header : request.getHeaders().entrySet()) {
-            connection.setRequestProperty(header.getKey(), header.getValue());
+        Socket outSocket = SocketChannel.open().socket();
+        if (vpnService != null) {
+            boolean protectSocket = vpnService.protect(outSocket);
+            Log.i(TAG, "Did protect socket: "+protectSocket);
         }
-        connection.setRequestMethod(request.getMethod());
-        connection.setDoOutput(request.hasBody());
-        connection.connect();
-        //pipe request body to connection
-        if (request.hasBody()){
-            Thread serverToClient = new PipeThread(fromClientIn, connection.getOutputStream());
-            serverToClient.start();
-            try {
-                serverToClient.join();
-            } catch (InterruptedException e) {
-                Log.i(TAG, "data send stream interrupted: "+e.getMessage());
-                return;
-            }
+        DataCompressionProxyHelper.modifyRequest(requestModel);
+        DataCompressionProxyHelper.connectSocketToProxy(outSocket);
+
+//        SocketAddress socketAddress = new InetSocketAddress(requestModel.getHost(), 80);
+//        outSocket.connect(socketAddress);
+
+
+
+        forwardRequest(requestModel, fromClientIn, toClientOut, outSocket);
+    }
+
+    private void forwardRequest(RequestModel requestModel, InputStream fromClientIn,
+            OutputStream toClientOut, Socket outSocket)  throws IOException{
+
+        OutputStream serverOut = outSocket.getOutputStream();
+        InputStream serverIn = outSocket.getInputStream();
+
+        Thread fromServerPipe = new PipeThread(serverIn, toClientOut);
+        fromServerPipe.start();
+        //write actual request to server
+        requestModel.writeTo(serverOut);
+        Thread fromClientPipe = null;
+        if (requestModel.hasBody()){
+            fromClientPipe = new PipeThread(fromClientIn, serverOut);
+            fromClientPipe.start();
         }
-
-        //constructing response
-        Response response = new Response(connection.getResponseCode(), connection.getResponseMessage());
-        Map<String, List<String>> responseHeaders = connection.getHeaderFields();
-        for (Map.Entry<String, List<String>> header: responseHeaders.entrySet()){
-            String headerValue = StringUtils.join(header.getValue(), ",");
-            String headerName = header.getKey();
-            //null means status line
-            if (headerName == null){
-                response.setStatusLine(headerValue);
-            } else {
-                response.addHeader(headerName,headerValue);
-            }
-        }
-        response.setContentLength(connection.getContentLength());
-
-        response.writeTo(toClientOut);
-
-        Thread serverToClient = new PipeThread(connection.getInputStream(), toClientOut);
-        serverToClient.start();
         try {
-            serverToClient.join();
+            if (fromClientPipe != null){
+                fromClientPipe.join();
+            }
+            fromServerPipe.join();
         } catch (InterruptedException e) {
-            Log.i(TAG, "data receive stream interrupted: "+e.getMessage());
+        } finally {
+            outSocket.close();
         }
     }
 
-    public void setChainingProxy(Proxy chainingProxy) {
-        this.chainingProxy = chainingProxy;
-    }
-
+    //TODO add okhttp3 connection like this
+//    private void handleOkHttp3(RequestModel requestModel, InputStream fromClientIn,
+//            OutputStream toClientOut)  throws IOException{
+////        URL url = new URL("http", requestModel.getHost(), requestModel.getUri());
+////
+////        OkHttpClient client = new OkHttpClient();
+////        okhttp3.Request okRequest = new RequestModel.Bui
+////
+////        HttpURLConnection connection;
+////        if (chainingProxy != null) {
+////            connection = (HttpURLConnection) url.openConnection(chainingProxy);
+////        } else {
+////            connection = (HttpURLConnection) url.openConnection();
+////        }
+////
+////        connection.setRequestMethod(requestModel.getMethod());
+////        for (Map.Entry<String, String> header : requestModel.getHeaders().entrySet()) {
+////            connection.setRequestProperty(header.getKey(), header.getValue());
+////        }
+////        connection.setRequestMethod(requestModel.getMethod());
+////        connection.setDoOutput(requestModel.hasBody());
+////        connection.setReadTimeout(5000);
+////        connection.setUseCaches(false);
+////        connection.connect();
+////        //pipe requestModel body to connection
+////        if (requestModel.hasBody()){
+////            Thread serverToClient = new PipeThread(fromClientIn, connection.getOutputStream());
+////            serverToClient.start();
+////            try {
+////                serverToClient.join();
+////            } catch (InterruptedException e) {
+////                Log.i(TAG, "data send stream interrupted: "+e.getMessage());
+////                return;
+////            }
+////        }
+////
+////        //constructing response
+////        Response response = new Response(connection.getResponseCode(), connection.getResponseMessage());
+////        Map<String, List<String>> responseHeaders = connection.getHeaderFields();
+////        for (Map.Entry<String, List<String>> header: responseHeaders.entrySet()){
+////            String headerValue = StringUtils.join(header.getValue(), ",");
+////            String headerName = header.getKey();
+////            //null means status line
+////            if (headerName == null){
+////                response.setStatusLine(headerValue);
+////            } else {
+////                response.addHeader(headerName,headerValue);
+////            }
+////        }
+////        response.setContentLength(connection.getContentLength());
+////
+////        response.writeTo(toClientOut);
+////
+////        Thread serverToClient = new PipeThread(connection.getInputStream(), toClientOut);
+////        serverToClient.start();
+////        try {
+////            serverToClient.join();
+////        } catch (InterruptedException e) {
+////            Log.i(TAG, "data receive stream interrupted: "+e.getMessage());
+////        }
+//    }
 
     private class Connection extends Thread {
 
@@ -185,7 +248,7 @@ public class HttpCompressingProxyServer {
                 in = socket.getInputStream();
                 out = socket.getOutputStream();
 
-                Request request = parseRequest();
+                RequestModel request = parseRequest();
                 if (request != null) {
                     handleRequest(request, in, out);
                 }
@@ -198,9 +261,9 @@ public class HttpCompressingProxyServer {
             }
         }
 
-        private Request parseRequest() throws IOException {
+        private RequestModel parseRequest() throws IOException {
             try {
-                Request request = Request.read(in);
+                RequestModel request = RequestModel.read(in);
                 if (request.isValid()) {
                     return request;
                 }

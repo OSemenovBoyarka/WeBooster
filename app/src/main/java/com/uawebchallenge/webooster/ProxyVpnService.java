@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
+import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.UnknownHostException;
 
@@ -227,7 +228,9 @@ public class ProxyVpnService extends VpnService implements Runnable {
                 SocketAddress outProxyAddr = new InetSocketAddress(outProxyAddress, SOCKS_SOCKS_OUT_PROXY_PORT);
                 Proxy outProxy = new Proxy(Proxy.Type.SOCKS, outProxyAddr);
 
-                httpProxyServer.setChainingProxy(outProxy);
+                httpProxyServer
+                        .setVpnService(ProxyVpnService.this)
+                        .setChainingProxy(outProxy);
                 try {
                     httpProxyServer.start(HTTP_PROXY_PORT);
                 } catch (IOException e) {
@@ -236,7 +239,6 @@ public class ProxyVpnService extends VpnService implements Runnable {
                 }
             }
         }).start();
-
     }
 
     private void stopHttpServer() {

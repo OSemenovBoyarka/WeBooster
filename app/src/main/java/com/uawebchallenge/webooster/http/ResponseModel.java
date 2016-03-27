@@ -17,7 +17,7 @@ import static com.uawebchallenge.webooster.http.HttpConstants.HTTP_VERSION_1_1;
  *
  * @author Alexander Semenov
  */
-public class Response {
+public class ResponseModel {
 
     private final Map<String, String> headers  = new HashMap<>();
     private String httpVersion;
@@ -27,12 +27,12 @@ public class Response {
     private int contentLength = -1;
 
     //region Construction
-    public Response(String httpVersion, int statusCode, String statusMessage) {
+    public ResponseModel(String httpVersion, int statusCode, String statusMessage) {
         this(statusCode, statusMessage);
         this.httpVersion = httpVersion;
     }
 
-    public Response(int statusCode, String statusMessage) {
+    public ResponseModel(int statusCode, String statusMessage) {
         this.statusCode = statusCode;
         this.statusMessage = statusMessage;
         this.httpVersion = HTTP_VERSION_1_1;
@@ -64,22 +64,22 @@ public class Response {
         return statusLine;
     }
 
-    public Response setContentLength(int contentLength) {
+    public ResponseModel setContentLength(int contentLength) {
         this.contentLength = contentLength;
         return this;
     }
 
-    public Response setStatusLine(String statusLine) {
+    public ResponseModel setStatusLine(String statusLine) {
         this.statusLine = statusLine;
         return this;
     }
 
-    public Response addHeader(String name, String value){
+    public ResponseModel addHeader(String name, String value){
         headers.put(name, value);
         return this;
     }
 
-    public Response addHeaders(Map<String, String> headers){
+    public ResponseModel addHeaders(Map<String, String> headers){
         this.headers.putAll(headers);
         return this;
     }
