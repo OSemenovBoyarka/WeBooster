@@ -15,7 +15,8 @@ public class ConfigHelper {
     public static void setUseGoogleProxy(Context context, boolean useProxy){
         context.getSharedPreferences(ProxyVpnService.PREFS_NAME, Context.MODE_PRIVATE)
                 .edit()
-                .putBoolean(ProxyVpnService.PREFS_ENABLE_GOOGLE_COMPRESSION, useProxy);
+                .putBoolean(ProxyVpnService.PREFS_ENABLE_GOOGLE_COMPRESSION, useProxy)
+                .apply();
     }
 
 
